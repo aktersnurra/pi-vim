@@ -68,6 +68,8 @@ const SOFTWARE_CURSOR_RESETS = ["\x1b[0m", "\x1b[27m"] as const;
 const INSERT_CURSOR_SHAPE = "\x1b[5 q";
 const BLOCK_CURSOR_SHAPE = "\x1b[1 q";
 const RESET_CURSOR_SHAPE = "\x1b[0 q";
+const VISUAL_SELECTION_START = "\x1b[38;2;21;21;21m\x1b[48;2;208;208;208m";
+const VISUAL_SELECTION_END = "\x1b[39m\x1b[49m";
 const CLIPBOARD_WRITE_TIMEOUT_MS = PI_NATIVE_CLIPBOARD_TIMEOUT_MS + 500;
 const CLIPBOARD_SPAWN_FAILURE_LIMIT = 3;
 const CLIPBOARD_READ_TIMEOUT_MS = 750;
@@ -75,6 +77,7 @@ const CLIPBOARD_READ_MAX_BUFFER_BYTES = 1024 * 1024;
 const MODE_COLORS = {
   insert: "borderMuted",
   normal: "borderAccent",
+  visual: "warning",
   ex: "warning",
 } as const;
 const TOKEN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
@@ -129,6 +132,7 @@ function resolveModeColors(
   return {
     insert: colors?.insert ?? MODE_COLORS.insert,
     normal: colors?.normal ?? MODE_COLORS.normal,
+    visual: colors?.visual ?? MODE_COLORS.visual,
     ex: colors?.ex ?? MODE_COLORS.ex,
   };
 }
@@ -158,6 +162,7 @@ function buildModeColorizers(
   return {
     insert: colorizer("insert"),
     normal: colorizer("normal"),
+    visual: colorizer("visual"),
     ex: colorizer("ex"),
   };
 }
@@ -618,6 +623,7 @@ export class ModalEditor extends CustomEditor {
   private pendingGCount: string = "";
   private pendingReplace: boolean = false;
   private pendingExCommand: string | null = null;
+  private visualAnchor: { line: number; col: number } | null = null;
   private acceptingBracketedPasteInExCommand: boolean = false;
   private pendingEscWhileAcceptingBracketedPasteInExCommand: boolean = false;
   private lastCharMotion: LastCharMotion | null = null;
@@ -1111,6 +1117,11 @@ export class ModalEditor extends CustomEditor {
       return;
     }
 
+    if ("visual" === this.mode) {
+      this.handleVisualMode(data);
+      return;
+    }
+
     if (this.pendingReplace) {
       this.pendingReplace = false;
       if (!this.isPrintableInput(data)) {
@@ -1215,6 +1226,8 @@ export class ModalEditor extends CustomEditor {
     if ("insert" === this.mode) {
       this.clearUnderlyingPasteStateIfActive();
       this.setMode("normal");
+    } else if ("visual" === this.mode) {
+      this.exitVisualMode();
     } else {
       super.handleInput("\x1b"); // pass escape to abort agent
     }
@@ -1840,6 +1853,11 @@ export class ModalEditor extends CustomEditor {
       return;
     }
 
+    if (data === "v") {
+      this.enterVisualMode();
+      return;
+    }
+
     if (data === "d") {
       this.pendingOperator = "d";
       return;
@@ -1963,6 +1981,83 @@ export class ModalEditor extends CustomEditor {
 
     if (this.isPrintableChunk(data)) return;
     super.handleInput(data);
+  }
+
+  private enterVisualMode(): void {
+    this.visualAnchor = { ...this.getCursor() };
+    this.setMode("visual");
+  }
+
+  private exitVisualMode(): void {
+    this.visualAnchor = null;
+    this.setMode("normal");
+  }
+
+  private getVisualRangeAbs(): { startAbs: number; endAbs: number } | null {
+    if (!this.visualAnchor) return null;
+    const anchorAbs = this.getAbsoluteIndex(
+      this.visualAnchor.line,
+      this.visualAnchor.col,
+    );
+    const cursorAbs = this.getAbsoluteIndexFromCursor();
+    return {
+      startAbs: Math.min(anchorAbs, cursorAbs),
+      endAbs: Math.max(anchorAbs, cursorAbs),
+    };
+  }
+
+  private applyVisualOperator(op: "y" | "d" | "c"): void {
+    const range = this.getVisualRangeAbs();
+    if (!range) return;
+
+    if (op === "y") {
+      this.yankRangeByAbsolute(range.startAbs, range.endAbs, true);
+      this.exitVisualMode();
+      return;
+    }
+
+    this.deleteRangeByAbsolute(range.startAbs, range.endAbs, true);
+    this.visualAnchor = null;
+    this.setMode(op === "c" ? "insert" : "normal");
+  }
+
+  private handleVisualMode(data: string): void {
+    if (data === "v") {
+      this.exitVisualMode();
+      return;
+    }
+
+    if (data === "y" || data === "d" || data === "c") {
+      this.applyVisualOperator(data);
+      return;
+    }
+
+    const movementKey =
+      this.isDigit(data) ||
+      data === "g" ||
+      data === "G" ||
+      data === "h" ||
+      data === "j" ||
+      data === "k" ||
+      data === "l" ||
+      data === "0" ||
+      data === "$" ||
+      data === "^" ||
+      data === "_" ||
+      data === "w" ||
+      data === "b" ||
+      data === "e" ||
+      data === "W" ||
+      data === "B" ||
+      data === "E" ||
+      data === "%" ||
+      data === "{" ||
+      data === "}" ||
+      data === ";" ||
+      data === "," ||
+      CHAR_MOTION_KEYS.has(data);
+
+    if (movementKey) this.handleNormalMode(data);
   }
 
   private openLineBelow(): void {
@@ -3306,6 +3401,7 @@ export class ModalEditor extends CustomEditor {
   render(width: number): string[] {
     const lines = super.render(width);
     this.syncCursorShapeForRender(lines);
+    this.highlightVisualSelection(lines);
     if (lines.length === 0) return lines;
 
     const rawLabel = this.fitModeLabel(this.getModeLabel(), width);
@@ -3322,12 +3418,82 @@ export class ModalEditor extends CustomEditor {
     return lines;
   }
 
+  private highlightLineSegment(
+    line: string,
+    startCol: number,
+    endCol: number,
+  ): string {
+    if (endCol <= startCol) return line;
+
+    let col = 0;
+    let startIndex = line.length;
+    let endIndex = line.length;
+    for (let i = 0; i < line.length; ) {
+      if (line.startsWith(CURSOR_MARKER, i)) {
+        i += CURSOR_MARKER.length;
+        continue;
+      }
+
+      if (col === startCol) startIndex = i;
+      if (col === endCol) {
+        endIndex = i;
+        break;
+      }
+
+      i += 1;
+      col += 1;
+    }
+
+    if (startCol <= col && startIndex === line.length) startIndex = line.length;
+    if (endIndex === line.length && endCol > col) endIndex = line.length;
+    if (endIndex <= startIndex) return line;
+
+    return `${line.slice(0, startIndex)}${VISUAL_SELECTION_START}${line.slice(
+      startIndex,
+      endIndex,
+    )}${VISUAL_SELECTION_END}${line.slice(endIndex)}`;
+  }
+
+  private highlightVisualSelection(lines: string[]): void {
+    if (this.mode !== "visual" || !this.visualAnchor) return;
+
+    const cursor = this.getCursor();
+    const bufferLines = this.getLines();
+    const first =
+      this.visualAnchor.line < cursor.line ||
+      (this.visualAnchor.line === cursor.line &&
+        this.visualAnchor.col <= cursor.col)
+        ? this.visualAnchor
+        : cursor;
+    const last = first === this.visualAnchor ? cursor : this.visualAnchor;
+    const renderOffset = Math.max(0, lines.length - bufferLines.length - 1);
+
+    for (let lineIndex = first.line; lineIndex <= last.line; lineIndex++) {
+      const renderedIndex = renderOffset + lineIndex;
+      const renderedLine = lines[renderedIndex];
+      const bufferLine = bufferLines[lineIndex] ?? "";
+      if (renderedLine === undefined) continue;
+
+      const startCol = lineIndex === first.line ? first.col : 0;
+      const endCol =
+        lineIndex === last.line
+          ? Math.min(last.col + 1, bufferLine.length)
+          : bufferLine.length;
+      lines[renderedIndex] = this.highlightLineSegment(
+        renderedLine,
+        startCol,
+        endCol,
+      );
+    }
+  }
+
   private getModeLabelColorizer(): ((s: string) => string) | null {
     return this.labelColorizers?.[this.getActiveMode()] ?? null;
   }
 
   private getModeLabel(): string {
     if ("insert" === this.mode) return " INSERT ";
+    if ("visual" === this.mode) return " VISUAL ";
     if (this.pendingExCommand !== null) return ` EX ${this.pendingExCommand}_ `;
 
     const prefixCount = this.prefixCount;

@@ -676,7 +676,7 @@ function runScenario(
 ): {
   text: string;
   register: string;
-  editorMode: "normal" | "insert";
+  editorMode: ReturnType<ModalEditor["getMode"]>;
   cursorLine: number;
   cursorCol: number;
 } {
@@ -721,6 +721,7 @@ function assertInsertBorderAfterModeChangingCommand(
     borderColorizers: {
       insert: (s: string) => `<insert>${s}</insert>`,
       normal: (s: string) => `<normal>${s}</normal>`,
+      visual: (s: string) => `<visual>${s}</visual>`,
       ex: (s: string) => `<ex>${s}</ex>`,
     },
   });
@@ -919,6 +920,68 @@ describe("mode transitions", () => {
   });
 });
 
+describe("visual mode", () => {
+  it("v enters and exits characterwise visual mode", () => {
+    const { editor } = createEditorWithSpy("abc");
+
+    sendKeys(editor, ["v"]);
+    assert.equal(editor.getMode(), "visual");
+
+    sendKeys(editor, ["v"]);
+    assert.equal(editor.getMode(), "normal");
+  });
+
+  it("escape exits visual mode without forwarding abort escape", () => {
+    const { editor } = createEditorWithSpy("abc");
+
+    sendKeys(editor, ["v", "\x1b"]);
+
+    assert.equal(editor.getMode(), "normal");
+    assert.equal(editor.getText(), "abc");
+  });
+
+  it("y yanks the selected character range without mutating text", () => {
+    const { editor } = createEditorWithSpy("abc");
+
+    sendKeys(editor, ["v", "l", "y"]);
+
+    assert.equal(editor.getMode(), "normal");
+    assert.equal(editor.getRegister(), "ab");
+    assert.equal(editor.getText(), "abc");
+  });
+
+  it("d deletes the selected character range and writes it to the register", () => {
+    const { editor } = createEditorWithSpy("abc");
+
+    sendKeys(editor, ["v", "l", "d"]);
+
+    assert.equal(editor.getMode(), "normal");
+    assert.equal(editor.getRegister(), "ab");
+    assert.equal(editor.getText(), "c");
+  });
+
+  it("c changes the selected character range and enters insert mode", () => {
+    const { editor } = createEditorWithSpy("abc");
+
+    sendKeys(editor, ["v", "l", "c"]);
+
+    assert.equal(editor.getMode(), "insert");
+    assert.equal(editor.getRegister(), "ab");
+    assert.equal(editor.getText(), "c");
+  });
+
+  it("renders the visual selection on the editor text line", () => {
+    const { editor } = createEditorWithSpy("abc");
+
+    sendKeys(editor, ["v", "l"]);
+    const lines = editor.render(40);
+
+    assert.ok((lines[1] ?? "").includes("\x1b[48;2;208;208;208m"));
+    assert.ok(!(lines.at(-1) ?? "").includes("\x1b[48;2;208;208;208m──"));
+    assert.ok(lines.at(-1)?.includes(" VISUAL "));
+  });
+});
+
 describe("ex mini-mode", () => {
   it("renders the pending EX command and consumes prefixed counts", () => {
     const session = createEditorWithSpy("hello");
@@ -956,6 +1019,10 @@ describe("ex mini-mode", () => {
       normal: (s: string) => {
         calls.push(`normal:${s}`);
         return `\x1b[34m${s}\x1b[39m`;
+      },
+      visual: (s: string) => {
+        calls.push(`visual:${s}`);
+        return `\x1b[33m${s}\x1b[39m`;
       },
       ex: (s: string) => {
         calls.push(`ex:${s}`);

@@ -23,7 +23,7 @@ describe("piVim mode color settings reader", () => {
     );
   });
 
-  it("reads all three mode color settings", () => {
+  it("reads all mode color settings", () => {
     assert.deepEqual(
       readPiVimModeColors(
         {
@@ -31,13 +31,14 @@ describe("piVim mode color settings reader", () => {
             modeColors: {
               insert: "muted",
               normal: "primary",
+              visual: "yellow",
               ex: "warning",
             },
           },
         },
         {},
       ),
-      { insert: "muted", normal: "primary", ex: "warning" },
+      { insert: "muted", normal: "primary", visual: "yellow", ex: "warning" },
     );
   });
 

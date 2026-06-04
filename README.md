@@ -23,6 +23,7 @@ Default-equivalent `settings.json`:
     "modeColors": {
       "insert": "borderMuted",
       "normal": "borderAccent",
+      "visual": "warning",
       "ex": "warning"
     },
     "syncBorderColorWithMode": false
@@ -124,6 +125,8 @@ Use pi-vim for Vim muscle-memory in Pi prompts. Skip it if you need full Vim par
 |---|---|
 | `Esc` / `Ctrl+[` | Insert → Normal mode |
 | `Esc` / `Ctrl+[` | Normal mode → pass to Pi (aborts the agent under default Pi keybindings) |
+| `Esc` / `Ctrl+[` | Visual → Normal mode |
+| `v` | Normal → characterwise Visual mode; Visual → Normal mode |
 | `:` | Normal → EX mini-mode |
 | `i` | Normal → Insert at cursor |
 | `a` | Normal → Insert after cursor |
@@ -133,6 +136,21 @@ Use pi-vim for Vim muscle-memory in Pi prompts. Skip it if you need full Vim par
 | `O` | Normal → open line above + Insert |
 
 Optional: move Pi's `app.interrupt` off bare `escape` in `~/.pi/agent/keybindings.json` if it overlaps with Insert→Normal; user config wins.
+
+#### visual mode
+
+Characterwise Visual mode starts with `v` and highlights the selected prompt text with a light text box, similar to Vim/tmux selection. Motions extend the selection from the anchor to the cursor.
+
+| key | action |
+|---|---|
+| `v` | Enter/exit characterwise Visual mode |
+| `Esc` / `Ctrl+[` | Exit Visual mode and keep the prompt unchanged |
+| motion keys | Extend the selected range using existing normal-mode motions |
+| `y` | Yank selected text into the unnamed register, then return to Normal |
+| `d` | Delete selected text into the unnamed register, then return to Normal |
+| `c` | Delete selected text into the unnamed register, then enter Insert |
+
+Linewise `V` and block Visual `<C-v>` are not implemented.
 
 #### ex mini-mode
 
@@ -343,7 +361,7 @@ Put reads the OS clipboard first unless the last local register write was not mi
 | `w` / `e` / `b` + `W` / `E` / `B` | Cross-line for both `word` and `WORD` motions | Cross-line |
 | `0` / `$` operators | Exclusive of the anchor col | `0` is inclusive of col 0 |
 | Undo / redo | Delegates undo to readline; normal-mode `<C-r>` redo is supported | Full per-change undo tree |
-| Visual mode | Not implemented | `v`, `V`, `<C-v>` |
+| Visual mode | Characterwise `v` is supported with light-box selection plus `y`, `d`, and `c`; linewise `V` and block Visual `<C-v>` are not implemented | `v`, `V`, `<C-v>` |
 | Text objects | `iw` / `aw`, `iW` / `aW`, quote objects, and paren/bracket/brace objects; delimited counts cancel | Full text-object set |
 | `%` matching | `()`, `[]`, `{}` only; lexical same-delimiter matching with no counts, quote/angle matching, parser/matchit logic, mixed-delimiter validation, or Visual `%` yet | Also supports percentage jumps and broader matching |
 | Count prefix | Operators, motions, navigation, `x`, `r`, `p`, `P`; capped at `MAX_COUNT=9999` | Full support |
@@ -357,7 +375,7 @@ Put reads the OS clipboard first unless the last local register write was not mi
 
 Explicitly deferred:
 
-- Visual modes (`v`, `V`, block visual), including Visual `%`
+- Linewise Visual (`V`) and block Visual (`<C-v>`), including Visual `%`
 - Tag text objects (`it`, `at`)
 - Paragraph/sentence text objects (`ip`, `ap`, `is`, `as`)
 - Angle bracket text objects (`i<`, `a<`) or angle-bracket `%` matching
